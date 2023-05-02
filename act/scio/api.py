@@ -27,18 +27,22 @@ import re
 from functools import lru_cache
 from pathlib import Path, PurePath
 from typing import Dict, List, Text, cast, Any
+from collections import defaultdict
 
 import caep
 import elasticsearch
 import greenstalk
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Response, Query
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import ConstrainedStr
 
+from act.scio import mitre
+
+
 import act.scio.config
 import act.scio.es
-from act.scio.models import Document, LookupResponse, SubmitResponse
+from act.scio.models import Document, LookupResponse, SubmitResponse, ReportTechniques
 
 XDG_CACHE = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser()
 
@@ -240,6 +244,85 @@ def indicators(
     )
 
     return PlainTextResponse("\n".join(row[0] for row in res))
+
+
+@app.get("/report_techniques")
+def technique_count(
+    report: List[str] = Query(default=None),
+    args: argparse.Namespace = Depends(parse_args),
+) -> ReportTechniques:
+    """
+
+    Count MITRE ATT&CK techniques in reports
+
+    """
+
+    if not args.elasticsearch_client:
+        raise HTTPException(status_code=412, detail="Elasticsearch is not configured")
+
+    report_tech = ReportTechniques()
+
+    query_string = f"_id:({' OR '.join(report)})"
+
+    for doc in act.scio.es.search(
+        args.elasticsearch_client,
+        query_string=query_string,
+    ):
+        report_tech.reports[doc["hexdigest"]] = doc.get("metadata", {}).get(
+            "dc:title", "[UNKNOWN]"
+        )
+
+    for tech, count in act.scio.es.aggregation(
+        args.elasticsearch_client,
+        term="mitre_attack.Techniques.keyword",
+        query_string=query_string,
+    ):
+        report_tech.techniques[tech] = count
+        report_tech.all[tech] = count
+
+    for tech, count in act.scio.es.aggregation(
+        args.elasticsearch_client,
+        term="mitre_attack.SubTechniques.keyword",
+        query_string=query_string,
+    ):
+        report_tech.sub_techniques[tech] = count
+        report_tech.all[tech] = count
+
+    return report_tech
+
+
+@app.get("/report_navigator_layer")
+def report_navigator_layer(
+    report: List[str] = Query(default=None),
+    args: argparse.Namespace = Depends(parse_args),
+) -> Dict[str, Any]:
+    """
+
+    Count MITRE ATT&CK techniques in reports
+
+    """
+
+    if not args.elasticsearch_client:
+        raise HTTPException(status_code=412, detail="Elasticsearch is not configured")
+
+    mitre_map = defaultdict(list)
+
+    query_string = f"_id:({' OR '.join(report)})"
+
+    for doc in act.scio.es.search(
+        args.elasticsearch_client,
+        query_string=query_string,
+    ):
+        # Get Title - fallback to report hexdigest (ID)
+        title = doc.get("metadata", {}).get("dc:title", doc["hexdigest"])
+        mitre_attack = doc.get("mitre_attack", {})
+
+        for tech in mitre_attack.get("Techniques", []):
+            mitre_map[tech].append(title)
+        for tech in mitre_attack.get("SubTechniques", []):
+            mitre_map[tech].append(title)
+
+    return mitre.navigator_layer(mitre_map, "ReportTitle")
 
 
 @app.get("/download")  # type: ignore

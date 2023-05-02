@@ -1,6 +1,7 @@
 from typing import Optional
 
-from pydantic import BaseModel, StrictInt, StrictStr
+from pydantic import BaseModel, StrictInt, StrictStr, validator
+from typing import Dict
 
 from act.scio.tlp import TLP
 
@@ -34,3 +35,10 @@ class SubmitResponse(ScioBaseDocument):
     hexdigest: StrictStr
     count: StrictInt
     error: Optional[StrictStr]
+
+
+class ReportTechniques(BaseModel):
+    reports: Dict[str, str] = {}
+    techniques: Dict[str, int] = {}
+    sub_techniques: Dict[str, int] = {}
+    all: Dict[str, int] = {}
